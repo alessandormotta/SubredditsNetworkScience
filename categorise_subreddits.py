@@ -1,48 +1,62 @@
-import re
+from transformers import pipeline
 from typing import List, Dict, Tuple
 
-# A basic English stopwords list. You can expand this as needed.
-CUSTOM_STOPWORDS = {
-    'the', 'and', 'a', 'to', 'in', 'of', 'for', 'on', 'at', 'from', 
-    'by', 'with', 'about', 'as', 'into', 'like', 'through', 'after',
-    'over', 'between', 'out', 'up', 'down', 'off', 'above', 'under',
-    'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where',
-    'why', 'how', 'all', 'any', 'both', 'each', 'few', 'more', 'most', 
-    'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 
-    'so', 'than', 'too', 'very', 'can', 'will', 'just'
-}
+# Load the zero-shot classification pipeline
+# This may download a ~1.3GB model the first time you run it.
+classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
 
-def preprocess_text(text: str) -> List[str]:
+def preprocess_queries(queries: List[str]) -> str:
     """
-    Preprocesses text by tokenizing, removing stopwords, and converting to lowercase.
+    Combines and lowercases all queries into a single string.
     """
-    text = text.lower()
-    # Use regex to extract words (alphanumeric sequences)
-    words = re.findall(r'\w+', text)
-    # Filter out stopwords
-    filtered_words = [word for word in words if word not in CUSTOM_STOPWORDS]
-    return filtered_words
+    queries_text = " ".join(q.lower() for q in queries)
+    return queries_text
 
-def categorize_subreddit(description: str, queries: List[str]) -> Tuple[str, Dict[str, int]]:
+def categorize_subreddit(description: str, queries: List[str]) -> Tuple[str, Dict[str, float]]:
     """
-    Categorizes a subreddit into one of the four political compass quadrants 
-    based on its description and associated queries.
+    Uses a zero-shot classification model to assign one of four 
+    political compass categories to the combined text of the 
+    description and queries.
+    
+    Returns:
+        category (str): The predicted political quadrant.
+        scores (Dict[str, float]): Confidence scores for each quadrant.
     """
-    keywords = {
-        'Left-Libertarian': ["anarchy", "progressive", "socialism", "justice", "activism", "equality"],
-        'Right-Libertarian': ["libertarian", "freedom", "capitalism", "markets", "individual"],
-        'Left-Authoritarian': ["state", "socialism", "authoritarian", "collectivism", "regulation"],
-        'Right-Authoritarian': ["conservative", "nationalist", "patriot", "tradition", "law", "order"]
-    }
+    # Define the four political compass quadrants as labels
+    candidate_labels = [
+        "Left-Libertarian", 
+        "Right-Libertarian", 
+        "Left-Authoritarian", 
+        "Right-Authoritarian"
+    ]
     
-    scores = {key: 0 for key in keywords.keys()}
+    # Combine description and queries into a single text block
+    combined_text = (description or "").lower() + " " + preprocess_queries(queries or [])
     
-    processed_description = preprocess_text(description or "")
-    processed_queries = [q.lower() for q in (queries or [])]
+    # Run zero-shot classification
+    prediction = classifier(combined_text, candidate_labels=candidate_labels)
     
-    for quadrant, quadrant_keywords in keywords.items():
-        scores[quadrant] += sum(1 for word in processed_description if word in quadrant_keywords)
-        scores[quadrant] += sum(1 for word in processed_queries if word in quadrant_keywords)
+    # prediction['labels'] is a list of labels sorted by descending score
+    # prediction['scores'] is a list of confidence scores corresponding to those labels
+    # e.g. prediction['labels'][0] is the label with the highest confidence
     
-    category = max(scores, key=scores.get)
+    # Create a dictionary of label -> score
+    scores = {label: 0.0 for label in candidate_labels}
+    for label, score in zip(prediction["labels"], prediction["scores"]):
+        scores[label] = score
+    
+    # The highest-confidence label is our predicted category
+    category = prediction['labels'][0]
     return category, scores
+
+
+# -------------- DEMO --------------
+if __name__ == "__main__":
+    # Example subreddit descriptions and queries
+    example_description = "We discuss economic freedom, free markets, and individual rights here."
+    example_queries = ["economic freedom", "libertarian discourse"]
+    
+    predicted_category, category_scores = categorize_subreddit(example_description, example_queries)
+    
+    print("Predicted Category:", predicted_category)
+    print("Scores:", category_scores)
