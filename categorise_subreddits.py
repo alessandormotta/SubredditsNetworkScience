@@ -1,77 +1,95 @@
+import os
+from huggingface_hub import snapshot_download
 from transformers import pipeline
 from typing import List, Dict, Tuple
 
-
 class ZeroShotPoliticalClassifier:
-    def __init__(self, model_name: str = "facebook/bart-large-mnli"):
+    def __init__(
+        self, 
+        model_id: str = "facebook/bart-large-mnli", 
+        local_dir: str = "./local_model",
+        force_download: bool = False
+    ):
         """
-        Initialize the zero-shot classification pipeline once.
+        Initialize the zero-shot classification pipeline once, showing a progress bar
+        during the model download if it's not already cached locally.
         
-        Parameters:
-            model_name (str): The name of the model to load. 
-                              Defaults to "facebook/bart-large-mnli".
+        Args:
+            model_id (str): The Hugging Face model ID (e.g. "facebook/bart-large-mnli").
+            local_dir (str): The local directory where the model will be cached.
+            force_download (bool): If True, forces re-download of the model even if it exists.
         """
-        print("Loading zero-shot classification model. This may take a while the first time...")
-        self.classifier = pipeline("zero-shot-classification", model=model_name)
         
-        # Define the political compass quadrants
+        # Check if the local folder already has the model
+        # If not, or if force_download = True, download with a progress bar
+        if force_download or not os.path.isdir(local_dir):
+            print(f"Downloading {model_id} model weights. This may take a while...")
+            snapshot_download(
+                repo_id=model_id,
+                local_dir=local_dir,
+                resume_download=True,     # If download is interrupted, it can resume
+                force_download=force_download
+                # progress=True is enabled by default so you get a nice progress bar
+            )
+        
+        # Now load the pipeline from the local folder
+        print("Loading the zero-shot classification pipeline...")
+        self.classifier = pipeline(
+            "zero-shot-classification",
+            model=local_dir
+        )
+        print("Model loaded successfully!\n")
+        
+        # Define the political compass quadrants (candidate labels)
         self.candidate_labels = [
             "Left-Libertarian",
             "Right-Libertarian",
             "Left-Authoritarian",
             "Right-Authoritarian"
         ]
-        print("Model loaded successfully!\n")
-    
-    def _preprocess_text(self, description: str, queries: List[str]) -> str:
-        """
-        Combine subreddit description and queries into a single text block.
-        Convert to lowercase to normalize.
-        """
-        description = (description or "").lower()
-        query_text = " ".join((q or "").lower() for q in queries)
-        return f"{description} {query_text}".strip()
     
     def categorize_subreddit(self, description: str, queries: List[str]) -> Tuple[str, Dict[str, float]]:
         """
-        Uses a zero-shot classification model to assign one of four 
-        political compass categories to the combined text.
+        Uses a zero-shot classification model to assign one of the four
+        political compass categories to the combined text of 'description' and 'queries'.
         
         Returns:
             category (str): The predicted political quadrant.
-            scores (Dict[str, float]): Confidence scores for each quadrant.
+            scores (Dict[str, float]): A dictionary of label -> confidence score.
         """
-        # Preprocess the text
-        combined_text = self._preprocess_text(description, queries)
+        # Combine description + queries into one text
+        description = (description or "").lower()
+        queries_text = " ".join((q or "").lower() for q in queries)
+        combined_text = f"{description} {queries_text}".strip()
         
         # Perform zero-shot classification
         prediction = self.classifier(
-            combined_text, 
+            combined_text,
             candidate_labels=self.candidate_labels
         )
         
-        # Build a dict of {label: score}
-        scores = {
-            label: score for label, score in zip(prediction["labels"], prediction["scores"])
-        }
+        # Build a dictionary of label -> score
+        scores = dict(zip(prediction["labels"], prediction["scores"]))
         
-        # The top label is our predicted category
+        # The highest score label is our predicted category
         category = prediction["labels"][0]
         return category, scores
 
 
-# ---------------- USAGE EXAMPLE ----------------
+# ------------------- DEMO USAGE -------------------
 if __name__ == "__main__":
-    # Initialize the classifier once
-    classifier = ZeroShotPoliticalClassifier()
-
-    # Example usage
-    subreddit_description = "We discuss economic freedom, free markets, and individual rights here."
-    queries = ["economic freedom", "libertarian discourse"]
-    
-    predicted_category, category_scores = classifier.categorize_subreddit(
-        subreddit_description, queries
+    # Instantiating the classifier once
+    classifier = ZeroShotPoliticalClassifier(
+        model_id="facebook/bart-large-mnli", 
+        local_dir="./bart_mnli_model",
+        force_download=False  # Set to True if you want to force a re-download
     )
-    
+
+    # Example subreddit description and queries
+    example_description = "We discuss economic freedom, free markets, and individual rights here."
+    example_queries = ["economic freedom", "libertarian discourse"]
+
+    # Perform classification
+    predicted_category, category_scores = classifier.categorize_subreddit(example_description, example_queries)
     print("Predicted Category:", predicted_category)
     print("Scores:", category_scores)
